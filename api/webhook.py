@@ -8,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage   # ← вот это обязательно добавь!
+from aiogram.fsm.storage.memory import MemoryStorage  # ← вот это обязательно!
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiogram.exceptions import TelegramBadRequest
 logging.basicConfig(level=logging.DEBUG)  # DEBUG — покажет всё!
