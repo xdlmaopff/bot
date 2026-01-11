@@ -1,49 +1,29 @@
-import os
 import asyncio
 import logging
-import traceback
-from aiohttp import web
+import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage  # ← вот это обязательно!
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest
-logging.basicConfig(level=logging.DEBUG)  # DEBUG — покажет всё!
 
-TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-WEBHOOK_PATH = "/webhook"
-
-logging.debug(f"TOKEN: {repr(TOKEN)}")  # покажет, что реально в переменной
-logging.debug(f"WEBHOOK_URL: {repr(WEBHOOK_URL)}")
-
-try:
-    bot = Bot(token=TOKEN)
-    dp = Dispatcher()
-    logging.info("Bot и Dispatcher созданы успешно")
-except Exception as e:
-    logging.critical("Краш при создании Bot/Dispatcher:")
-    logging.critical(traceback.format_exc())
-    raise
-
-ADMIN_CHAT_ID = -5270508762
-CHANNEL_ID = -1003665236800
+# ────────────────────────────────────────────────
+TOKEN = "8486942529:AAEEHucAbkLSrxeBM2DlGCZURAs0_H5MzXk"
+ADMIN_CHAT_ID = -5270508762              # чат админов
+CHANNEL_ID = -1003665236800              # канал проекта (пока не используем авто-добавление)
 PROJECT_LINK = "https://t.me/+7IoWGj4ZCKs2NmRi"
 
 CHECK_SUBSCRIPTION_BEFORE_FORM = True
 
-if not TOKEN:
-    raise ValueError("BOT_TOKEN not set in environment variables!")
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL not set in environment variables!")
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 # ────────────────────────────────────────────────
 
 
@@ -76,35 +56,29 @@ async def is_subscribed(user_id: int) -> bool:
         return False
 
 
+# ──── Уведомления пользователю ───────────────────────────────────
+
 async def notify_accepted(user_id: int):
     try:
         await bot.send_message(
             user_id,
-            "✅ Твоя анкета **принята**!\n\nС тобой скоро свяжутся по личным сообщениям.\nБудь на связи."
+            "✅ Твоя анкета **принята**!\n\n"
+            "С тобой скоро свяжутся по личным сообщениям.\n"
+            "Будь на связи и не пропускай сообщения от админов."
         )
     except Exception:
-        pass
+        pass  # если заблокировал бота — ничего страшного
 
 
 async def send_rejection(user_id: int):
     try:
         await bot.send_message(
             user_id,
-            "❌ К сожалению, по данной анкете принято решение **отказать**.\nСпасибо за отклик!"
+            "❌ К сожалению, по данной анкете принято решение **отказать**.\n"
+            "Спасибо за отклик!"
         )
     except Exception:
         pass
-
-
-async def on_startup():
-    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
-    await bot.set_webhook(url=webhook_url)
-    logging.info(f"Webhook установлен: {webhook_url}")
-
-
-async def on_shutdown():
-    await bot.delete_webhook(drop_pending_updates=True)
-    logging.info("Webhook удалён")
 
 
 # ──── Обработчики ─────────────────────────────────────────────────
@@ -112,6 +86,7 @@ async def on_shutdown():
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
+
     if await is_subscribed(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Я подписался", callback_data="confirmed")]
@@ -135,7 +110,7 @@ async def check_again(callback: types.CallbackQuery):
             ])
         )
     else:
-        await callback.answer("Подписка не найдена", show_alert=True)
+        await callback.answer("Подписка не найдена 😕", show_alert=True)
 
 
 @dp.callback_query(lambda c: c.data == "confirmed")
@@ -143,6 +118,7 @@ async def confirmed(callback: types.CallbackQuery, state: FSMContext):
     if not await is_subscribed(callback.from_user.id):
         await callback.answer("Сначала подпишись на канал!", show_alert=True)
         return
+
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("Отлично! Заполняем анкету.\n\nГород?")
     await state.set_state(Form.city)
@@ -216,20 +192,33 @@ async def process_photo(message: types.Message, state: FSMContext):
     await state.clear()
 
 
+# ──── Решения админов ─────────────────────────────────────────────
+
 @dp.callback_query(lambda c: c.data.startswith("accept_"))
 async def process_accept(callback: types.CallbackQuery):
     try:
         user_id = int(callback.data.split("_")[1])
-        current = callback.message.caption or callback.message.text or "🆕 НОВАЯ АНКЕТА\n\n"
-        new_text = current + "\n✅ <b>Принят</b> (свяжутся вручную)"
 
         if callback.message.caption is not None:
-            await callback.message.edit_caption(caption=new_text, reply_markup=None, parse_mode="HTML")
+            # Есть подпись — добавляем к существующей
+            new_caption = callback.message.caption + "\n✅ <b>Принят</b> (свяжутся вручную)"
+            await callback.message.edit_caption(
+                caption=new_caption,
+                reply_markup=None,
+                parse_mode="HTML"
+            )
         else:
-            await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="HTML")
+            # Нет подписи — редактируем как обычный текст
+            new_text = (callback.message.text or "🆕 НОВАЯ АНКЕТА") + "\n\n✅ <b>Принят</b> (свяжутся вручную)"
+            await callback.message.edit_text(
+                text=new_text,
+                reply_markup=None,
+                parse_mode="HTML"
+            )
 
         await notify_accepted(user_id)
         await callback.answer("Принято")
+
     except Exception as e:
         logging.error(f"Ошибка при принятии: {e}")
         await callback.answer("Ошибка", show_alert=True)
@@ -241,32 +230,30 @@ async def process_reject(callback: types.CallbackQuery):
         user_id = int(callback.data.split("_")[1])
         await send_rejection(user_id)
 
-        current = callback.message.caption or callback.message.text or "🆕 НОВАЯ АНКЕТА\n\n"
-        new_text = current + "\n❌ <b>Отказано</b>"
-
         if callback.message.caption is not None:
-            await callback.message.edit_caption(caption=new_text, reply_markup=None, parse_mode="HTML")
+            new_caption = callback.message.caption + "\n❌ <b>Отказано</b>"
+            await callback.message.edit_caption(
+                caption=new_caption,
+                reply_markup=None,
+                parse_mode="HTML"
+            )
         else:
-            await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="HTML")
+            new_text = (callback.message.text or "🆕 НОВАЯ АНКЕТА") + "\n\n❌ <b>Отказано</b>"
+            await callback.message.edit_text(
+                text=new_text,
+                reply_markup=None,
+                parse_mode="HTML"
+            )
 
         await callback.answer("Отказано")
+
     except Exception as e:
         logging.error(f"Ошибка при отказе: {e}")
         await callback.answer("Ошибка", show_alert=True)
 
+async def main():
+    await dp.start_polling(bot, skip_updates=True)
 
-# ──── Самое важное для Vercel — глобальная переменная app ────────────────
 
-app = web.Application()
-
-try:
-    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-    webhook_handler.register(app, path=WEBHOOK_PATH)
-    setup_application(app, dp, bot=bot)
-    app.on_startup.append(lambda _: asyncio.create_task(on_startup()))
-    app.on_shutdown.append(lambda _: asyncio.create_task(on_shutdown()))
-    logging.info("App создан и webhook-хендлер зарегистрирован")
-except Exception as e:
-    logging.critical("Краш при создании app:")
-    logging.critical(traceback.format_exc())
-    raise
+if __name__ == "__main__":
+    asyncio.run(main())
