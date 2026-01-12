@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -10,12 +9,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest
 
 # ────────────────────────────────────────────────
-TOKEN = "8486942529:AAEEHucAbkLSrxeBM2DlGCZURAs0_H5MzXk"
-ADMIN_CHAT_ID = -5270508762              # чат админов
-CHANNEL_ID = -1003665236800              # канал проекта (пока не используем авто-добавление)
-PROJECT_LINK = "https://t.me/+7IoWGj4ZCKs2NmRi"
+TOKEN = "8486942529:AAEEHucAbkLSrxeBM2DlGCZURAs0_H5MzXk"           # ← свой токен
+ADMIN_CHAT_ID = -5270508762                                         # ← чат, куда слать анкеты
+CHANNEL_ID = -1003665236800                                         # ← ID канала для проверки подписки
+PROJECT_LINK = "https://t.me/+7IoWGj4ZCKs2NmRi"                     # ← ссылка на канал
 
-CHECK_SUBSCRIPTION_BEFORE_FORM = True
+CHECK_SUBSCRIPTION_BEFORE_FORM = True                               # True = требует подписку
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -24,28 +23,25 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
 # ────────────────────────────────────────────────
-
-
 class Form(StatesGroup):
     city = State()
     age = State()
     experience = State()
     photo = State()
 
+WELCOME_TEXT = f"""Привет!
+Это набор в проект «Могильное дело».
+Задания: прессинг, разборки, поджоги, выносы, тяжёлые разговоры и т.п.
+Оплата высокая (15–150к+ за задачу).
 
-WELCOME_TEXT = f"""Привет!  
-Это проект Могильное дело.
-Задания: избиения, поджоги и т.п.
-Оплата высокая.
-
-Сначала нужно быть подписанным на канал:
-
+Сначала подпишись на канал:
 🔗 {PROJECT_LINK}
 
 После подписки жми кнопку ниже ↓"""
 
-
+# ──── Проверка подписки ────────────────────────────────────────────
 async def is_subscribed(user_id: int) -> bool:
     if not CHECK_SUBSCRIPTION_BEFORE_FORM:
         return True
@@ -55,43 +51,37 @@ async def is_subscribed(user_id: int) -> bool:
     except TelegramBadRequest:
         return False
 
-
-# ──── Уведомления пользователю ───────────────────────────────────
-
+# ──── Уведомления пользователю ─────────────────────────────────────
 async def notify_accepted(user_id: int):
     try:
         await bot.send_message(
             user_id,
             "✅ Твоя анкета **принята**!\n\n"
-            "С тобой скоро свяжутся по личным сообщениям.\n"
-            "Будь на связи и не пропускай сообщения от админов."
+            "С тобой скоро свяжутся в личке.\n"
+            "Будь на связи, не блокируй бота и не пропускай сообщения."
         )
-    except Exception:
-        pass  # если заблокировал бота — ничего страшного
-
+    except:
+        pass
 
 async def send_rejection(user_id: int):
     try:
         await bot.send_message(
             user_id,
-            "❌ К сожалению, по данной анкете принято решение **отказать**.\n"
-            "Спасибо за отклик!"
+            "❌ По твоей анкете принято решение **отказать**.\n"
+            "Спасибо за отклик."
         )
-    except Exception:
+    except:
         pass
 
-
-# ──── Обработчики ─────────────────────────────────────────────────
-
+# ──── Старт ────────────────────────────────────────────────────────
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
-
     if await is_subscribed(message.from_user.id):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Я подписался", callback_data="confirmed")]
         ])
-        await message.answer(WELCOME_TEXT, reply_markup=kb)
+        await message.answer(WELCOME_TEXT, reply_markup=kb, disable_web_page_preview=True)
     else:
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="Подписаться на канал", url=PROJECT_LINK)],
@@ -99,19 +89,15 @@ async def start(message: types.Message, state: FSMContext):
         ])
         await message.answer("❗ Сначала подпишись на канал", reply_markup=kb)
 
-
 @dp.callback_query(lambda c: c.data == "check_sub_again")
 async def check_again(callback: types.CallbackQuery):
     if await is_subscribed(callback.from_user.id):
-        await callback.message.edit_text(
-            WELCOME_TEXT,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="Я подписался", callback_data="confirmed")]
-            ])
-        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Я подписался", callback_data="confirmed")]
+        ])
+        await callback.message.edit_text(WELCOME_TEXT, reply_markup=kb, disable_web_page_preview=True)
     else:
         await callback.answer("Подписка не найдена 😕", show_alert=True)
-
 
 @dp.callback_query(lambda c: c.data == "confirmed")
 async def confirmed(callback: types.CallbackQuery, state: FSMContext):
@@ -124,30 +110,27 @@ async def confirmed(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.city)
     await callback.answer()
 
-
+# ──── Анкета ───────────────────────────────────────────────────────
 @dp.message(Form.city)
 async def process_city(message: types.Message, state: FSMContext):
     await state.update_data(city=message.text.strip())
     await message.answer("Возраст?")
     await state.set_state(Form.age)
 
-
 @dp.message(Form.age)
 async def process_age(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
-        await message.answer("Нужны только цифры")
+        await message.answer("Только цифры")
         return
     await state.update_data(age=message.text)
-    await message.answer("Коротко об опыте (улица/спорт/силовики/другое)")
+    await message.answer("Коротко опыт (улица / спорт / силовики / другое)")
     await state.set_state(Form.experience)
-
 
 @dp.message(Form.experience)
 async def process_exp(message: types.Message, state: FSMContext):
     await state.update_data(experience=message.text.strip())
-    await message.answer("Фото (по желанию). Если нет — пиши «нет»")
+    await message.answer("Фото (по желанию). Если нет — напиши «нет»")
     await state.set_state(Form.photo)
-
 
 @dp.message(Form.photo)
 async def process_photo(message: types.Message, state: FSMContext):
@@ -156,7 +139,7 @@ async def process_photo(message: types.Message, state: FSMContext):
     username = message.from_user.username or f"id{user_id}"
 
     admin_text = (
-        f"🆕 <b>НОВАЯ АНКЕТА</b>\n"
+        f"<b>🆕 НОВАЯ АНКЕТА</b>\n"
         f"От: @{username}  [{user_id}]\n"
         f"Город: {data.get('city', '-')}\n"
         f"Возраст: {data.get('age', '-')}\n"
@@ -191,47 +174,38 @@ async def process_photo(message: types.Message, state: FSMContext):
     await message.answer("Анкета отправлена на рассмотрение.\nОжидай решения.")
     await state.clear()
 
-
-# ──── Решения админов ─────────────────────────────────────────────
-
+# ──── Решения админа ───────────────────────────────────────────────
 @dp.callback_query(lambda c: c.data.startswith("accept_"))
 async def process_accept(callback: types.CallbackQuery):
     try:
         user_id = int(callback.data.split("_")[1])
-
-        if callback.message.caption is not None:
-            # Есть подпись — добавляем к существующей
-            new_caption = callback.message.caption + "\n✅ <b>Принят</b> (свяжутся вручную)"
+        if callback.message.caption:
+            new_caption = callback.message.caption + "\n\n✅ <b>Принят</b> (свяжутся вручную)"
             await callback.message.edit_caption(
                 caption=new_caption,
                 reply_markup=None,
                 parse_mode="HTML"
             )
         else:
-            # Нет подписи — редактируем как обычный текст
             new_text = (callback.message.text or "🆕 НОВАЯ АНКЕТА") + "\n\n✅ <b>Принят</b> (свяжутся вручную)"
             await callback.message.edit_text(
                 text=new_text,
                 reply_markup=None,
                 parse_mode="HTML"
             )
-
         await notify_accepted(user_id)
         await callback.answer("Принято")
-
     except Exception as e:
-        logging.error(f"Ошибка при принятии: {e}")
+        logging.error(f"accept error: {e}")
         await callback.answer("Ошибка", show_alert=True)
-
 
 @dp.callback_query(lambda c: c.data.startswith("reject_"))
 async def process_reject(callback: types.CallbackQuery):
     try:
         user_id = int(callback.data.split("_")[1])
         await send_rejection(user_id)
-
-        if callback.message.caption is not None:
-            new_caption = callback.message.caption + "\n❌ <b>Отказано</b>"
+        if callback.message.caption:
+            new_caption = callback.message.caption + "\n\n❌ <b>Отказано</b>"
             await callback.message.edit_caption(
                 caption=new_caption,
                 reply_markup=None,
@@ -244,16 +218,14 @@ async def process_reject(callback: types.CallbackQuery):
                 reply_markup=None,
                 parse_mode="HTML"
             )
-
         await callback.answer("Отказано")
-
     except Exception as e:
-        logging.error(f"Ошибка при отказе: {e}")
+        logging.error(f"reject error: {e}")
         await callback.answer("Ошибка", show_alert=True)
 
+# ──── Запуск ───────────────────────────────────────────────────────
 async def main():
     await dp.start_polling(bot, skip_updates=True)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
