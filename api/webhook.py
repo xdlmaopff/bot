@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -7,24 +8,21 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
 # ────────────────────────────────────────────────
-TOKEN = "8486942529:AAEEHucAbkLSrxeBM2DlGCZURAs0_H5MzXk"           # ← свой токен
-ADMIN_CHAT_ID = -5270508762                                         # ← чат, куда слать анкеты
-CHANNEL_ID = -1003665236800                                         # ← ID канала для проверки подписки
-PROJECT_LINK = "https://t.me/+7IoWGj4ZCKs2NmRi"                     # ← ссылка на канал
-
-CHECK_SUBSCRIPTION_BEFORE_FORM = True                               # True = требует подписку
+TOKEN = "8486942529:AAEEHucAbkLSrxeBM2DlGCZURAs0_H5MzXk"
+ADMIN_CHAT_ID = -5270508762
+CHANNEL_ID = -1003665236800
+PROJECT_LINK = "https://t.me/+7IoWGj4ZCKs2NmRi"
+CHECK_SUBSCRIPTION_BEFORE_FORM = True
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ────────────────────────────────────────────────
 class Form(StatesGroup):
     city = State()
     age = State()
@@ -41,7 +39,6 @@ WELCOME_TEXT = f"""Привет!
 
 После подписки жми кнопку ниже ↓"""
 
-# ──── Проверка подписки ────────────────────────────────────────────
 async def is_subscribed(user_id: int) -> bool:
     if not CHECK_SUBSCRIPTION_BEFORE_FORM:
         return True
@@ -51,7 +48,6 @@ async def is_subscribed(user_id: int) -> bool:
     except TelegramBadRequest:
         return False
 
-# ──── Уведомления пользователю ─────────────────────────────────────
 async def notify_accepted(user_id: int):
     try:
         await bot.send_message(
@@ -73,7 +69,7 @@ async def send_rejection(user_id: int):
     except:
         pass
 
-# ──── Старт ────────────────────────────────────────────────────────
+# ──── Handlers (все твои обработчики остаются без изменений) ───────
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -104,13 +100,11 @@ async def confirmed(callback: types.CallbackQuery, state: FSMContext):
     if not await is_subscribed(callback.from_user.id):
         await callback.answer("Сначала подпишись на канал!", show_alert=True)
         return
-
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer("Отлично! Заполняем анкету.\n\nГород?")
     await state.set_state(Form.city)
     await callback.answer()
 
-# ──── Анкета ───────────────────────────────────────────────────────
 @dp.message(Form.city)
 async def process_city(message: types.Message, state: FSMContext):
     await state.update_data(city=message.text.strip())
@@ -174,25 +168,16 @@ async def process_photo(message: types.Message, state: FSMContext):
     await message.answer("Анкета отправлена на рассмотрение.\nОжидай решения.")
     await state.clear()
 
-# ──── Решения админа ───────────────────────────────────────────────
 @dp.callback_query(lambda c: c.data.startswith("accept_"))
 async def process_accept(callback: types.CallbackQuery):
     try:
         user_id = int(callback.data.split("_")[1])
         if callback.message.caption:
             new_caption = callback.message.caption + "\n\n✅ <b>Принят</b> (свяжутся вручную)"
-            await callback.message.edit_caption(
-                caption=new_caption,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
         else:
             new_text = (callback.message.text or "🆕 НОВАЯ АНКЕТА") + "\n\n✅ <b>Принят</b> (свяжутся вручную)"
-            await callback.message.edit_text(
-                text=new_text,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="HTML")
         await notify_accepted(user_id)
         await callback.answer("Принято")
     except Exception as e:
@@ -206,26 +191,44 @@ async def process_reject(callback: types.CallbackQuery):
         await send_rejection(user_id)
         if callback.message.caption:
             new_caption = callback.message.caption + "\n\n❌ <b>Отказано</b>"
-            await callback.message.edit_caption(
-                caption=new_caption,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_caption(caption=new_caption, reply_markup=None, parse_mode="HTML")
         else:
             new_text = (callback.message.text or "🆕 НОВАЯ АНКЕТА") + "\n\n❌ <b>Отказано</b>"
-            await callback.message.edit_text(
-                text=new_text,
-                reply_markup=None,
-                parse_mode="HTML"
-            )
+            await callback.message.edit_text(text=new_text, reply_markup=None, parse_mode="HTML")
         await callback.answer("Отказано")
     except Exception as e:
         logging.error(f"reject error: {e}")
         await callback.answer("Ошибка", show_alert=True)
 
-# ──── Запуск ───────────────────────────────────────────────────────
+# ──── Webhook + запуск ─────────────────────────────────────────────
+async def on_startup(bot: Bot):
+    webhook_path = "/webhook"
+    webhook_url = f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}{webhook_path}"
+    await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+    logging.info(f"Webhook установлен: {webhook_url}")
+
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("Webhook удалён")
+
 async def main():
-    await dp.start_polling(bot, skip_updates=True)
+    app = web.Application()
+    webhook_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_handler.register(app, path="/webhook")
+    setup_application(app, dp, bot=bot)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 10000)))
+    await site.start()
+
+    await on_startup(bot)
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await on_shutdown(bot)
+        await runner.cleanup()
 
 if __name__ == "__main__":
     asyncio.run(main())
